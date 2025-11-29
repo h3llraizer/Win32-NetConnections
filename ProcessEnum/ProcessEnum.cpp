@@ -1,49 +1,40 @@
+#include <iostream>     // cout etc
+#include <winsock2.h>   // windown socket libraries
+#include <Ws2tcpip.h>   // Windows socket tcp/ip connections
+#include <iphlpapi.h> 
+#include <windows.h>    // OpenProcess etc
 
-#include <winsock2.h>
-#include <Ws2tcpip.h>
+#include "IPLayer.h"  // PcapPlusPlus header for creating IPv4Address objects
+
+#include <vector>  // std::vector
+#include <map>     // std::map
+#include <format> // std::format (for string formatting)
+
 #pragma comment(lib, "Ws2_32.lib")
-
-#include "IPLayer.h"
-
-#include <stdio.h>
-#include <iostream>
-#include <windows.h>
-#include <tlhelp32.h>
-#include <ProcessSnapshot.h>
-#include <Psapi.h>
-#include <iphlpapi.h>
 #pragma comment(lib, "iphlpapi.lib")
-
-#include <vector>
-#include <locale>
-#include <map>
-#include <codecvt>
-
-#include <format>
-
-std::string to_utf8(const std::wstring& w)
-{
-    if (w.empty()) return {};
-
-    int size = WideCharToMultiByte(CP_UTF8, 0,
-        w.c_str(), (int)w.size(),
-        nullptr, 0, nullptr, nullptr);
-
-    std::string result(size, 0);
-
-    WideCharToMultiByte(CP_UTF8, 0,
-        w.c_str(), (int)w.size(),
-        result.data(), size,
-        nullptr, nullptr);
-
-    return result;
-}
 
 class Snap {
 private:
     HANDLE hProcess = nullptr;
     std::vector<char> filePathVec;
     std::string fileNameS;
+
+    // split the full path and return the last element of the string which is the exe's name. \\ is delimeter
+    auto split(std::string path)
+    {
+        std::string cur;
+        for (auto& ch : path)
+        {
+            if (ch == '\\')
+            {
+                cur.clear();
+                continue;
+            }
+            cur += ch;
+        } 
+        return cur;
+    }
+
 public:
     Snap(DWORD pid)
     {
@@ -63,22 +54,6 @@ public:
             std::string exception = std::format("Could not QueryFullProcessImageNameA for process {}. Error {}", pid, GetLastError());
             throw std::exception(exception.c_str());
         }
-
-        auto split = [](std::string path) {
-            
-            std::string cur;
-            for (auto& ch : path)
-            {
-                if (ch == '\\')
-                {
-                    cur.clear();
-                    continue;
-                }
-                cur += ch;
-            }
-
-            return cur;
-        };
 
         fileNameS = split(std::string(filePathVec.data()));
     }
@@ -104,11 +79,46 @@ private:
     DWORD size = 0;
     DWORD result = 0;
 
+    auto getState(DWORD state)
+    {
+        switch (state)
+        {
+        case MIB_TCP_STATE_CLOSED:
+            return "CLOSED";
+        case MIB_TCP_STATE_LISTEN:
+            return "LISTEN";
+        case MIB_TCP_STATE_SYN_SENT:
+            return "SYN_SENT";
+        case MIB_TCP_STATE_SYN_RCVD:
+            return "SYN_RECV";
+        case MIB_TCP_STATE_ESTAB:
+            return "ESTAB";
+        case MIB_TCP_STATE_FIN_WAIT1:
+            return "FIN_WAIT1";
+        case MIB_TCP_STATE_FIN_WAIT2:
+            return "FIN_WAIT2";
+        case MIB_TCP_STATE_CLOSE_WAIT:
+            return "CLOSE_WAIT";
+        case MIB_TCP_STATE_CLOSING:
+            return "CLOSING";
+        case MIB_TCP_STATE_LAST_ACK:
+            return "LAST_ACK";
+        case MIB_TCP_STATE_TIME_WAIT:
+            return "TIME_WAIT";
+        case MIB_TCP_STATE_DELETE_TCB:
+            return "DELETE_TCB";
+        case MIB_TCP_STATE_RESERVED:
+            return "RESERVED";
+        default:
+            return "UNKNOWN";
+        }
+
+    }
+
 public:
     NetTcp() {
         for (;;) {
-            result = GetExtendedTcpTable(tcpTable.get(), &size, TRUE,
-                AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
+            result = GetExtendedTcpTable(tcpTable.get(), &size, TRUE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
 
             if (result == ERROR_INSUFFICIENT_BUFFER) {
                 // resize buffer
@@ -158,12 +168,12 @@ public:
             }
             catch (std::exception& e)
             {
-                /*std::cout << e.what();*/
-                std::cout << "(error)";
+                std::cout << e.what();
+                std::cout << "(error) ";
 
             }
 
-            std::cout << " State: " << state << "\n";
+            std::cout << getState(state) << "\n";
         }
     }
 
@@ -172,21 +182,21 @@ public:
 
 class NetUdp {
 private:
-    using UdpTablePtr = std::unique_ptr<MIB_UDPTABLE_OWNER_PID, decltype(&free)>;
+    using UdpTablePtr = std::unique_ptr<MIB_UDPTABLE2, decltype(&free)>;
     UdpTablePtr udpTable{ nullptr, free };
 
     DWORD size = 0;
     DWORD result = 0;
 
 public:
-    NetUdp()
-    {
+    NetUdp() {
         for (;;) {
-            result = GetExtendedUdpTable(udpTable.get(), &size, TRUE, AF_INET, UDP_TABLE_OWNER_PID, 0);
+            result = GetExtendedUdpTable(udpTable.get(), &size, TRUE,
+                AF_INET, UDP_TABLE_OWNER_PID, 0);
 
             if (result == ERROR_INSUFFICIENT_BUFFER) {
                 // resize buffer
-                udpTable.reset(static_cast<MIB_UDPTABLE_OWNER_PID*>(malloc(size)));
+                udpTable.reset(static_cast<MIB_UDPTABLE2*>(malloc(size)));
                 if (!udpTable) throw std::bad_alloc();
                 continue;
             }
@@ -199,7 +209,7 @@ public:
         }
     }
 
-    const MIB_UDPTABLE_OWNER_PID* get() const
+    const auto get() const  // return MIB_UDPTABLE2*
     {
         return udpTable.get();
     }
@@ -211,19 +221,18 @@ public:
 
         auto count = (*table).dwNumEntries;
 
-        std::pair<DWORD, std::pair<pcpp::IPv4Address, std::string>> connectionMap;
-
-
         std::cout << "UDP/IP Connections: " << count << "\n";
 
         for (DWORD i = 0; i < count; i++) {
-            MIB_UDPROW_OWNER_PID& row = (*table).table[i];
+            MIB_UDPROW2& row = (*table).table[i];
 
-            pcpp::IPv4Address localIp(row.dwLocalAddr);
-            u_short localPort = ntohs((u_short)row.dwLocalPort);
+            pcpp::IPv4Address localIp(ntohs(row.dwLocalAddr));
+            u_short localPort = ntohs(row.dwLocalPort);
+            pcpp::IPv4Address remoteIp(ntohs(row.dwRemoteAddr));
+            u_short remotePort = ntohs(row.dwRemotePort);
             auto pid = row.dwOwningPid;
 
-            std::cout << localIp.toString() << ":" << localPort << " " << " PID: " << pid << " Name: ";
+            std::cout << localIp.toString() << ":" << localPort << " " << remoteIp.toString() << ":" << remotePort << " PID: " << pid << " Name: ";
 
             std::unique_ptr<Snap> processName;
             try {
@@ -233,7 +242,7 @@ public:
             catch (std::exception& e)
             {
                 /*std::cout << e.what();*/
-                std::cout << "(error)";
+                std::cout << "(error) ";
 
             }
 
@@ -252,13 +261,11 @@ public:
 
         for (DWORD i = 0; i < count; i++)
         {
-            MIB_UDPROW_OWNER_PID& row = (*table).table[i];
+            auto& row = (*table).table[i];
 
             pcpp::IPv4Address localIp(row.dwLocalAddr);
             auto localPort = ntohs((u_short)row.dwLocalPort);
             auto pid = row.dwOwningPid;
-
-            //std::cout << localIp.toString() << ":" << localPort << " " << " PID: " << pid << " Name: ";
 
             std::unique_ptr<Snap> snap;
             std::string processName;
@@ -268,7 +275,6 @@ public:
             }
             catch (std::exception& e)
             {
-                /*std::cout << e.what();*/ // log this to file
                 processName = "(error)";
 
             }
@@ -289,12 +295,11 @@ int main()
 {
     auto tcp = std::make_unique<NetTcp>();
 
-    while (true) {
+    tcp->PrintConnections();
 
-        tcp->PrintConnections();
+    auto udp = std::make_unique<NetUdp>();
 
-        Sleep(3000);
-    }
+    udp->PrintConnections();
 
     return 0;
 

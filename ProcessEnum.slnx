@@ -3,5 +3,5 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="ProcessEnum/ProcessEnum.vcxproj" />
+  <Project Path="ProcessEnum/ProcessEnum.vcxproj" Id="eac82976-1cc3-466f-8b0e-7ed9bae3c7ce" />
 </Solution>
